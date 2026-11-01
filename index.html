@@ -7,14 +7,6 @@
 <meta name="color-scheme" content="dark">
 <title>Folio — EPUB Reader</title>
 
-<!-- Web fonts (Google Fonts). Loaded without blocking the page: if you're offline, or the request
-     fails, the app still opens and simply uses the fallback fonts listed in the CSS below.
-     To change fonts: edit the family names in this URL AND in the --font-* variables below. -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" media="print" onload="this.media='all'"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Literata:ital,wght@0,400;0,700;1,400;1,700&family=Open+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap">
-
 <style id="bookFontFaces"></style>
 <style id="bookScopedStyle"></style>
 <style>
@@ -32,9 +24,9 @@
     --purple: #a259ff;
 
     /* Fonts: web font first, then fallbacks that exist on Android */
-    --font-ui: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
-    --font-serif: 'Literata', Georgia, 'Noto Serif', 'Times New Roman', serif;
-    --font-sans-read: 'Open Sans', 'Lucida Grande', 'Lucida Sans Unicode', Verdana, Helvetica, sans-serif;
+    --font-ui: 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Roboto Mono', 'Droid Sans Mono', monospace;
+    --font-serif: Georgia, 'Noto Serif', 'NotoSerif', 'Droid Serif', 'Times New Roman', serif;
+    --font-sans-read: 'Lucida Grande', 'Lucida Sans Unicode', Verdana, Helvetica, Roboto, 'Droid Sans', sans-serif;
 
     --reader-size: 19px;
     --reader-leading: 1.7;
@@ -243,7 +235,7 @@
   }
   .page-inner-limit a{ color: #fff; text-decoration: underline; text-underline-offset: 3px; }
   .page-inner-limit hr{ border:none; border-top:1px solid var(--ink-faint);}
-  .page-inner-limit :focus-visible{ outline-style: solid; }
+  .page-inner-limit { outline-style: solid; }
   .page-inner-limit blockquote{
     margin: 1.2em 0; padding: .2em 0 .2em 18px;
     border-left: 2px solid var(--border); color: var(--ink-dim);
@@ -378,14 +370,6 @@
         <button data-val="1.4">Cozy</button>
         <button data-val="1.7">Comfort</button>
         <button data-val="2">Airy</button>
-      </div>
-    </div>
-    <div class="popover-row">
-      <div class="popover-label"><span>Side margins</span></div>
-      <div class="seg" id="padSeg">
-        <button data-val="10">Tight</button>
-        <button data-val="18">Normal</button>
-        <button data-val="30">Roomy</button>
       </div>
     </div>
   </div>
@@ -529,6 +513,39 @@
   function dirOf(path){ const i = path.lastIndexOf('/'); return i === -1 ? '' : path.slice(0, i); }
   function bookIdFor(name, size){ return name + '__' + size; }
   function fragOf(href){ return href && href.includes('#') ? decodePath(href.split('#')[1]) : ''; }
+
+  function sanitizeBookContent(root){
+       if(!root) return;
+     
+       // Remove elements that can execute scripts or embed external content.
+       root.querySelectorAll(
+         'script, iframe, frame, frameset, object, embed, applet, base'
+       ).forEach(el => el.remove());
+     
+       // Remove event handlers and dangerous attributes.
+       root.querySelectorAll('*').forEach(el => {
+         for(const attr of Array.from(el.attributes)){
+           const name = attr.name.toLowerCase();
+           const value = attr.value.trim();
+     
+           if(
+             name.startsWith('on') ||
+             name === 'srcdoc' ||
+             name === 'srcset'
+           ){
+             el.removeAttribute(attr.name);
+             continue;
+           }
+     
+           if(
+             ['href', 'src', 'xlink:href', 'action', 'formaction'].includes(name) &&
+             /^(javascript|vbscript):/i.test(value)
+           ){
+             el.removeAttribute(attr.name);
+           }
+         }
+       });
+     }
 
   function joinPath(dir, rel){
     rel = decodePath((rel || '').split('#')[0]);
@@ -894,7 +911,6 @@
   async function renderChapter(index, scrollTop, anchorId){
     if(index < 0 || index >= state.spine.length) return;
     const token = ++renderToken;
-    state.chapterIndex = index;
     const path = state.spine[index];
     const entry = findZipFile(state.zip, path);
     if(!entry){ toast('That section is missing from the file'); return; }
@@ -903,6 +919,7 @@
     if(token !== renderToken) return;
     const doc = new DOMParser().parseFromString(text, 'text/html');
     doc.querySelectorAll('script').forEach(s => s.remove());
+    sanitizeBookContent(doc.body);
     const chapterDir = dirOf(path);
 
     // Collect the chapter's own CSS (inline <style> + linked stylesheets) so
@@ -935,7 +952,9 @@
     doc.querySelectorAll('a[href]').forEach(a => {
       const href = a.getAttribute('href') || '';
       if(/^(https?:|mailto:|tel:)/i.test(href)){
-        a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener'); return;
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+        return;
       }
       if(href.startsWith('#')) return;
       const idx = spineIndexFor(joinPath(chapterDir, href));
@@ -949,6 +968,7 @@
     });
 
     content.innerHTML = doc.body ? doc.body.innerHTML : text;
+    state.chapterIndex = index;
     window.scrollTo(0, 0);
     lastY = 0;
     showBar();
@@ -1051,7 +1071,6 @@
   function syncSettingsUI(){
     document.querySelectorAll('#familySeg button').forEach(b => b.classList.toggle('active', b.dataset.val === state.family));
     document.querySelectorAll('#leadingSeg button').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.val) === state.leading));
-    document.querySelectorAll('#padSeg button').forEach(b => b.classList.toggle('active', parseInt(b.dataset.val, 10) === state.pad));
   }
   function saveSettings(){
     lsSet(SETTINGS_KEY, { fontSize: state.fontSize, leading: state.leading, pad: state.pad, family: state.family });
@@ -1072,7 +1091,6 @@
   }
   bindSeg('familySeg', v => { state.family = v; });
   bindSeg('leadingSeg', v => { state.leading = parseFloat(v); });
-  bindSeg('padSeg', v => { state.pad = parseInt(v, 10); });
 
   /* ================= Init ================= */
   const s = lsGet(SETTINGS_KEY);
