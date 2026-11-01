@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<title>Folio — EPUB Reader</title>
+
+<!-- Web fonts (Google Fonts). Loaded without blocking the page: if you're offline, or the request
+     fails, the app still opens and simply uses the fallback fonts listed in the CSS below.
+     To change fonts: edit the family names in this URL AND in the --font-* variables below. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Literata:ital,wght@0,400;0,700;1,400;1,700&family=Open+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap">
+
+<style id="bookFontFaces"></style>
+<style id="bookScopedStyle"></style>
+<style>
+  :root{
+    /* Terminal palette: OLED black and white. Purple is only used as the "pressed" colour. */
+    --bg: #000;
+    --bg-2: #000;
+    --surface: #000;
+    --surface-2: #000;
+    --border: rgba(255,255,255,.30);
+    --border-soft: rgba(255,255,255,.16);
+    --ink: #fff;
+    --ink-dim: rgba(255,255,255,.72);
+    --ink-faint: rgba(255,255,255,.5);
+    --purple: #a259ff;
+
+    /* Fonts: web font first, then fallbacks that exist on Android */
+    --font-ui: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+    --font-serif: 'Literata', Georgia, 'Noto Serif', 'Times New Roman', serif;
+    --font-sans-read: 'Open Sans', 'Lucida Grande', 'Lucida Sans Unicode', Verdana, Helvetica, sans-serif;
+
+    --reader-size: 19px;
+    --reader-leading: 1.7;
+    --reader-family: var(--font-serif);
+    --reader-max: 720px;
+    --topbar-h: 56px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+  }
+
+  *{ box-sizing: border-box; border-radius: 0; -webkit-tap-highlight-color: transparent; }
+  html{
+    -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
+    overscroll-behavior-y: contain;      /* stops pull-to-refresh from reloading the page */
+  }
+  html.lock, html.lock body{ overflow: hidden; }
+  body{
+    margin: 0; min-height: 100dvh;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: contain;
+  }
+  ::selection{ background: #fff; color: #000; }
+
+  ::-webkit-scrollbar{ width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track{ background: transparent; }
+  ::-webkit-scrollbar-thumb{ background: transparent; border: 1px solid var(--border); }
+
+  :focus-visible{ outline: 1px dashed #fff; outline-offset: 3px; }
+
+  button{ font-family: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+
+  /* ---------- Drawer (sidebar): covers 90% of the screen ---------- */
+  .scrim{ display: none; position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.7); }
+  .app.drawer-open .scrim{ display: block; }
+
+  .sidebar{
+    position: fixed; top: 0; bottom: 0; left: 0; width: 90%; z-index: 40;
+    display: flex; flex-direction: column;
+    padding-top: var(--safe-top);
+    background: var(--bg-2);
+    border-right: 1px dashed var(--border);
+    transform: translateX(-100%); visibility: hidden;
+    transition: transform .12s ease-out, visibility 0s .12s;
+  }
+  .app.drawer-open .sidebar{ transform: none; visibility: visible; transition: transform .12s ease-out; }
+  .sidebar-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 18px 16px 12px;
+    flex-shrink: 0;
+  }
+  .brand{
+    display:flex; align-items:center; gap:8px;
+    font-weight: 700; font-size: 16px;
+    white-space: nowrap;
+  }
+  .brand-mark{ flex-shrink:0; }
+  .brand-mark::before{ content: '>'; }
+  .brand::after{ content: '_'; margin-left: -6px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity: 0; } }
+  @media (prefers-reduced-motion: reduce){ .brand::after{ animation: none; } }
+
+  .icon-btn{
+    width: 40px; height: 40px;
+    display:flex; align-items:center; justify-content:center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .icon-btn:active{ border-color: var(--purple); }
+  .icon-btn.active{ background: #fff; border-color: #fff; color: #000; }
+  .icon-btn.pulse{ animation: pulse .2s ease-out; }
+  @keyframes pulse{ 0%{ transform: scale(1); } 45%{ transform: scale(1.14); } 100%{ transform: scale(1); } }
+
+  .tabs{
+    display:flex; gap: 6px;
+    margin: 4px 16px 14px;
+    flex-shrink: 0;
+  }
+  .tab{
+    flex:1; background: none; border: 1px solid var(--border);
+    padding: 11px 10px;
+    font-size: 12.5px; color: var(--ink-dim);
+  }
+  .tab:active{ border-color: var(--purple); }
+  .tab.active{ background: #fff; border-color: #fff; color: #000; font-weight: 700; }
+
+  .tab-panel{ flex:1; min-height:0; overflow-y:auto; overscroll-behavior: contain; padding: 0 12px calc(16px + var(--safe-bottom)); }
+  .tab-panel.hidden{ display:none; }
+
+  .folder-controls{ display:flex; gap:8px; padding: 4px 4px 14px; }
+  .btn-primary, .btn-secondary{
+    flex:1; padding: 13px 8px;
+    font-size: 12.5px; font-weight: 700; border: 1px solid var(--border);
+    background: var(--surface);
+    white-space: nowrap;
+  }
+  .btn-primary{ color: #fff; border-color: #fff; }
+  .btn-secondary{ color: var(--ink-dim); }
+  .btn-primary:active, .btn-secondary:active{ border-color: var(--purple); }
+
+  .hint{
+    font-size: 11.5px; color: var(--ink-faint); line-height: 1.5;
+    padding: 0 6px 10px;
+  }
+
+  .library-list, .toc-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  .book-item, .toc-item{
+    display:flex; align-items:center; gap:10px;
+    padding: 12px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    text-align:left; width:100%;
+  }
+  .book-item:active, .toc-item:active{ border-color: var(--purple); }
+  .book-item.open{ border-color: #fff; }
+  .book-cover{
+    width: 30px; height: 40px; flex-shrink:0;
+    border: 1px solid var(--border);
+    display:flex; align-items:center; justify-content:center;
+    font-size: 12px; color: var(--ink-dim);
+  }
+  .book-info{ min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .book-name{ font-size: 12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+  .book-sub{ font-size: 11px; color: var(--ink-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+
+  .toc-item{ font-size: 12.5px; color: var(--ink-dim); cursor:pointer; min-height: 46px; }
+  .toc-item[data-level="1"]{ padding-left: 22px; font-size: 12px; }
+  .toc-item[data-level="2"]{ padding-left: 34px; font-size: 11.5px; }
+  .toc-item.current{ color: var(--ink); border-color: #fff; }
+  .toc-item.current::before{ content:'>'; flex-shrink:0; font-weight:700; }
+
+  .empty-state{ padding: 18px 10px; font-size: 12.5px; color: var(--ink-faint); line-height:1.6; }
+
+  /* ---------- Top bar: slides away on scroll down, returns on scroll up ---------- */
+  .topbar{
+    position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+    height: calc(var(--topbar-h) + var(--safe-top));
+    padding: var(--safe-top) max(12px, var(--safe-right)) 0 max(12px, var(--safe-left));
+    display:flex; align-items:center; gap: 10px;
+    border-bottom: 1px dashed var(--border);
+    background: var(--bg);
+    transition: transform .12s ease-out;
+  }
+  .app.bar-hidden .topbar{ transform: translateY(-100%); }
+  .book-meta{ min-width:0; flex:1; }
+  .book-title{ font-size: 13.5px; font-weight: 700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .book-author{ font-size: 11.5px; color: var(--ink-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* ---------- Reader (the whole page scrolls, so the nav buttons scroll with the text) ---------- */
+  .reader{
+    padding: calc(var(--topbar-h) + var(--safe-top) + 14px) max(8px, var(--safe-right))
+             calc(30px + var(--safe-bottom)) max(8px, var(--safe-left));
+  }
+  .col{ max-width: 820px; margin: 0 auto; }
+
+  /* Previous / next: one pair above the content box, one below, side by side */
+  .chapter-nav{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .chapter-nav.top{ margin-bottom: 8px; }
+  .chapter-nav.bottom{ margin-top: 8px; }
+  .app:not(.has-book) .chapter-nav{ display: none; }
+  .nav-btn{
+    min-height: 46px; padding: 12px 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    font-size: 13px; font-weight: 700; color: var(--ink-dim);
+  }
+  .nav-btn:active:not(:disabled){ border-color: var(--purple); }
+  .nav-btn:disabled{ opacity: .25; cursor: default; }
+
+  .page{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .page-inner{ padding: 28px 4px; }
+  .page-inner-limit{
+    max-width: var(--reader-max);
+    margin: 0 auto;
+    font-family: var(--reader-family);
+    font-size: var(--reader-size);
+    line-height: var(--reader-leading);
+    color: var(--ink);
+    overflow-wrap: break-word;
+    overflow-x: clip;
+  }
+  /* The book's own stylesheet is scoped in (see @scope (#content) below,
+     injected at runtime) so things like centered lines or drop caps still
+     work. Font family is the one control we always want to win, even over
+     a book's explicit fonts, so it's pinned here with !important. */
+  .page-inner-limit, .page-inner-limit *{
+    font-family: var(--reader-family) !important;
+  }
+  .page-inner-limit p{ margin: 0 0 1.1em; }
+  .page-inner-limit img, .page-inner-limit svg, .page-inner-limit video, .page-inner-limit table{ max-width:100%; }
+  .page-inner-limit img{ height:auto; }
+  .page-inner-limit pre{ overflow-x: auto; }
+  .page-inner-limit [id]{ scroll-margin-top: calc(var(--topbar-h) + var(--safe-top) + 12px); }
+  .page-inner-limit h1, .page-inner-limit h2, .page-inner-limit h3{
+    font-family: var(--font-serif) !important; line-height:1.25; color:#fff;
+    margin: 1.4em 0 .6em;
+  }
+  .page-inner-limit a{ color: #fff; text-decoration: underline; text-underline-offset: 3px; }
+  .page-inner-limit hr{ border:none; border-top:1px solid var(--ink-faint);}
+  .page-inner-limit :focus-visible{ outline-style: solid; }
+  .page-inner-limit blockquote{
+    margin: 1.2em 0; padding: .2em 0 .2em 18px;
+    border-left: 2px solid var(--border); color: var(--ink-dim);
+  }
+
+  /* The welcome screen is app UI, not book text, so it stays in the terminal font */
+  .page-inner-limit .welcome, .page-inner-limit .welcome *{ font-family: var(--font-ui) !important; }
+  .welcome h1{
+    font-size: 26px; font-weight: 700; line-height: 1.25;
+    margin: 0 0 14px; color: #fff;
+  }
+  .welcome h1::before{ content: '$ '; color: var(--ink-faint); }
+  .welcome p{ color: var(--ink-dim); font-size: 14px; line-height: 1.7; }
+  .welcome .steps{ list-style:none; margin: 24px 0 24px; padding:0; display:flex; flex-direction:column; gap:14px; }
+  .welcome .steps li{ display:flex; gap:12px; align-items:flex-start; }
+  .step-num{ flex-shrink:0; font-size: 14px; font-weight:700; color:#fff; }
+  .step-num::before{ content: '['; }
+  .step-num::after{ content: ']'; }
+  .welcome .steps strong{ display:block; font-size: 13.5px; color: var(--ink); margin-bottom: 2px; }
+  .welcome .steps span{ font-size: 12.5px; color: var(--ink-faint); line-height: 1.5; }
+  .welcome .btn-primary{ width: 100%; }
+
+  .progress-track{
+    position: fixed; left: 0; right: 0; bottom: var(--safe-bottom); z-index: 10;
+    height: 6px; pointer-events: none;
+    background: var(--border-soft);
+  }
+  .progress-fill{
+    height:100%; width:0%;
+    background: #fff;
+    transition: width .12s ease-out;
+  }
+
+  /* ---------- Settings popover ---------- */
+  .popover{
+    position: fixed; z-index: 20; display: none;
+    top: calc(var(--topbar-h) + var(--safe-top) + 8px);
+    left: max(8px, var(--safe-left)); right: max(8px, var(--safe-right));
+    max-height: calc(100dvh - var(--topbar-h) - var(--safe-top) - 24px);
+    overflow-y: auto; overscroll-behavior: contain;
+    background: var(--surface); border: 1px solid #fff;
+    padding: 14px;
+  }
+  .popover.open{ display:block; }
+  .popover-row{ margin-bottom: 16px; }
+  .popover-row:last-child{ margin-bottom:0; }
+  .popover-label{ font-size: 11.5px; color: var(--ink-dim); margin-bottom: 8px; display:flex; justify-content:space-between; }
+  .size-row{ display:flex; align-items:center; gap:10px; }
+  .size-row input[type="range"]{ flex:1; min-width:0; }
+  .seg{ display:flex; gap:6px; }
+  .seg button{
+    flex:1; background:none; border: 1px solid var(--border);
+    padding: 11px 0; font-size: 12px; color: var(--ink-dim);
+  }
+  .seg button:active{ border-color: var(--purple); }
+  .seg button.active{ background: #fff; border-color: #fff; color: #000; font-weight: 700; }
+  input[type="range"]{
+    height: 32px; accent-color: #fff; background: transparent;
+  }
+
+  .toast{
+    display: none; position: fixed; left: 50%; z-index: 60;
+    bottom: calc(20px + var(--safe-bottom));
+    transform: translateX(-50%); max-width: 88%;
+    padding: 10px 14px; background: #000; border: 1px solid #fff;
+    font-size: 12px; text-align: center;
+  }
+  .toast.show{ display: block; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <aside class="sidebar" id="sidebar" aria-label="Library and contents">
+    <div class="sidebar-head">
+      <div class="brand"><span class="brand-mark"></span>Folio</div>
+      <button class="icon-btn" id="closeSidebar" aria-label="Close sidebar">✕</button>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-tab="library">Library</button>
+      <button class="tab" data-tab="contents">Contents</button>
+    </div>
+
+    <div class="tab-panel" id="panel-library">
+      <div class="folder-controls">
+        <button class="btn-primary" id="pickFiles">Add books</button>
+      </div>
+      <div class="hint">Pick one or more EPUB files from your phone. Nothing leaves this device.</div>
+      <ul class="library-list" id="libraryList">
+        <li class="empty-state">No books yet. Tap Add books and pick EPUB files from your phone.</li>
+      </ul>
+    </div>
+
+    <div class="tab-panel hidden" id="panel-contents">
+      <ol class="toc-list" id="tocList">
+        <li class="empty-state">Open a book to see its table of contents.</li>
+      </ol>
+    </div>
+  </aside>
+
+  <div class="scrim" id="scrim"></div>
+
+  <header class="topbar" id="topbar">
+    <button class="icon-btn" id="toggleSidebar" aria-label="Open library">☰</button>
+    <div class="book-meta">
+      <div class="book-title" id="bookTitle">No book open</div>
+      <div class="book-author" id="bookAuthor"></div>
+    </div>
+    <button class="icon-btn" id="bookmark" aria-label="Save reading position">☆</button>
+    <button class="icon-btn" id="openSettings" aria-label="Reading settings">⚙</button>
+  </header>
+
+  <div class="popover" id="settingsPopover">
+    <div class="popover-row">
+      <div class="popover-label"><span>Text size</span><span id="sizeReadout">19px</span></div>
+      <div class="size-row">
+        <button class="icon-btn" id="fontDec" aria-label="Smaller text">A−</button>
+        <input type="range" id="sizeSlider" min="10" max="48" step="1" value="19" aria-label="Text size">
+        <button class="icon-btn" id="fontInc" aria-label="Larger text">A+</button>
+      </div>
+    </div>
+    <div class="popover-row">
+      <div class="popover-label"><span>Typeface</span></div>
+      <div class="seg" id="familySeg">
+        <button data-val="serif">Serif</button>
+        <button data-val="sans">Sans</button>
+      </div>
+    </div>
+    <div class="popover-row">
+      <div class="popover-label"><span>Line spacing</span></div>
+      <div class="seg" id="leadingSeg">
+        <button data-val="1.4">Cozy</button>
+        <button data-val="1.7">Comfort</button>
+        <button data-val="2">Airy</button>
+      </div>
+    </div>
+    <div class="popover-row">
+      <div class="popover-label"><span>Side margins</span></div>
+      <div class="seg" id="padSeg">
+        <button data-val="10">Tight</button>
+        <button data-val="18">Normal</button>
+        <button data-val="30">Roomy</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="reader">
+    <div class="col">
+      <div class="chapter-nav top">
+        <button class="nav-btn nav-prev" aria-label="Previous chapter" disabled>&lt; Previous</button>
+        <button class="nav-btn nav-next" aria-label="Next chapter" disabled>Next &gt;</button>
+      </div>
+
+      <article class="page">
+        <div class="page-inner">
+          <div class="page-inner-limit" id="content">
+            <div class="welcome">
+              <h1>Your next chapter,<br>waiting.</h1>
+              <p>Folio reads EPUB files straight from your device. No uploads, no accounts.</p>
+              <ul class="steps">
+                <li><span class="step-num">1</span><div><strong>Add your books</strong><span>Open the menu and tap Add books to pick EPUB files.</span></div></li>
+                <li><span class="step-num">2</span><div><strong>Pick a book</strong><span>Tap a title in your library to start reading.</span></div></li>
+                <li><span class="step-num">3</span><div><strong>Adjust as you go</strong><span>Tap ⚙ for text size and typeface, and ☆ to save your place.</span></div></li>
+              </ul>
+              <button class="btn-primary" id="welcomeOpen">Open library</button>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="chapter-nav bottom">
+        <button class="nav-btn nav-prev" aria-label="Previous chapter" disabled>&lt; Previous</button>
+        <button class="nav-btn nav-next" aria-label="Next chapter" disabled>Next &gt;</button>
+      </div>
+    </div>
+  </main>
+
+  <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<input type="file" id="fileInput" accept=".epub,application/epub+zip" multiple hidden>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ================= Built-in zip reader (no external library, works offline) =================
+     Reads the central directory of a .zip/.epub and inflates entries with the browser's own
+     DecompressionStream. Exposes the tiny API the reader needs: zip.file(path), zip.forEach(cb),
+     and entry.async('text' | 'blob'). */
+  class MiniZip {
+    constructor(buffer){
+      this.bytes = new Uint8Array(buffer);
+      this.view = new DataView(buffer);
+      this.entries = new Map();
+      this._parse();
+    }
+    _parse(){
+      const v = this.view, len = this.bytes.length;
+      let eocd = -1;
+      for(let i = len - 22; i >= Math.max(0, len - 65557); i--){
+        if(v.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+      }
+      if(eocd === -1) throw new Error('Not a valid zip file');
+      const total = v.getUint16(eocd + 10, true);
+      let p = v.getUint32(eocd + 16, true);
+      if(p === 0xFFFFFFFF || total === 0xFFFF) throw new Error('Zip64 archives are not supported');
+      const decoder = new TextDecoder('utf-8');
+      for(let n = 0; n < total; n++){
+        if(v.getUint32(p, true) !== 0x02014b50) break;
+        const method = v.getUint16(p + 10, true);
+        const csize = v.getUint32(p + 20, true);
+        const nlen = v.getUint16(p + 28, true);
+        const elen = v.getUint16(p + 30, true);
+        const clen = v.getUint16(p + 32, true);
+        const lho = v.getUint32(p + 42, true);
+        const name = decoder.decode(this.bytes.subarray(p + 46, p + 46 + nlen));
+        if(!name.endsWith('/')){
+          this.entries.set(name, new MiniZipEntry(this, name, method, csize, lho));
+        }
+        p += 46 + nlen + elen + clen;
+      }
+    }
+    file(path){ return this.entries.get(path) || null; }
+    forEach(cb){ this.entries.forEach((entry, name) => cb(name, entry)); }
+  }
+
+  class MiniZipEntry {
+    constructor(zip, name, method, csize, lho){
+      this.zip = zip; this.name = name; this.method = method; this.csize = csize; this.lho = lho;
+    }
+    async _data(){
+      const v = this.zip.view, b = this.zip.bytes;
+      if(v.getUint32(this.lho, true) !== 0x04034b50) throw new Error('Corrupt zip entry: ' + this.name);
+      const start = this.lho + 30 + v.getUint16(this.lho + 26, true) + v.getUint16(this.lho + 28, true);
+      const raw = b.subarray(start, start + this.csize);
+      if(this.method === 0) return raw;
+      if(this.method !== 8) throw new Error('Unsupported compression method ' + this.method);
+      const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    async async(type){
+      const data = await this._data();
+      if(type === 'text') return new TextDecoder('utf-8').decode(data);
+      if(type === 'blob') return new Blob([data]);
+      return data;
+    }
+  }
+
+  /* ================= State ================= */
+  const DEFAULTS = { fontSize: 19, leading: 1.7, pad: 18, family: 'serif' };
+  const MIN_SIZE = 10, MAX_SIZE = 48;
+  const state = {
+    books: [],               // { id, name, file, meta }
+    currentBookId: null,
+    zip: null,
+    opfDir: '',
+    spine: [],
+    toc: [],                 // { title, href, frag, level, resolvedPath, spineIdx }
+    chapterIndex: 0,
+    imageCache: new Map(),
+    fontSize: DEFAULTS.fontSize,
+    leading: DEFAULTS.leading,
+    pad: DEFAULTS.pad,
+    family: DEFAULTS.family
+  };
+
+  const $ = id => document.getElementById(id);
+  const app = $('app'), content = $('content');
+  const libraryList = $('libraryList'), tocList = $('tocList');
+  const bookTitleEl = $('bookTitle'), bookAuthorEl = $('bookAuthor');
+  const progressFill = $('progressFill');
+  const bookmarkBtn = $('bookmark'), settingsBtn = $('openSettings');
+  const settingsPopover = $('settingsPopover');
+  const sizeSlider = $('sizeSlider'), sizeReadout = $('sizeReadout');
+  const toastEl = $('toast');
+  const prevBtns = document.querySelectorAll('.nav-prev');
+  const nextBtns = document.querySelectorAll('.nav-next');
+
+  /* ================= Helpers ================= */
+  function decodePath(p){ try{ return decodeURIComponent(p); }catch(e){ return p; } }
+  function dirOf(path){ const i = path.lastIndexOf('/'); return i === -1 ? '' : path.slice(0, i); }
+  function bookIdFor(name, size){ return name + '__' + size; }
+  function fragOf(href){ return href && href.includes('#') ? decodePath(href.split('#')[1]) : ''; }
+
+  function joinPath(dir, rel){
+    rel = decodePath((rel || '').split('#')[0]);
+    if(/^[a-z]+:\/\//i.test(rel)) return rel;
+    const parts = (dir ? dir.split('/') : []).concat(rel.split('/'));
+    const stack = [];
+    for(const part of parts){
+      if(part === '' || part === '.') continue;
+      if(part === '..') stack.pop(); else stack.push(part);
+    }
+    return stack.join('/');
+  }
+
+  function findZipFile(zip, path){
+    const direct = zip.file(path);
+    if(direct) return direct;
+    const target = path.replace(/^\//, '').toLowerCase();
+    let found = null;
+    zip.forEach((rel, entry) => { if(!found && rel.toLowerCase() === target) found = entry; });
+    return found;
+  }
+
+  let toastTimer = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
+  }
+
+  const lsGet = k => { try{ const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; }catch(e){ return null; } };
+  const lsSet = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ return false; } };
+  const bookmarkKey = id => 'folio-a:bm:' + id;
+  const SETTINGS_KEY = 'folio-a:settings';
+
+  /* ================= Overlays: drawer + settings popover (Android Back closes them) ================= */
+  let overlay = null;            // 'drawer' | 'popover' | null
+  let pushed = false, ignorePop = false;
+  let lastY = window.scrollY;
+
+  function syncOverlayClasses(){
+    app.classList.toggle('drawer-open', overlay === 'drawer');
+    settingsPopover.classList.toggle('open', overlay === 'popover');
+    settingsBtn.classList.toggle('active', overlay === 'popover');
+    document.documentElement.classList.toggle('lock', overlay === 'drawer');
+  }
+  function openOverlay(name){
+    if(overlay === name) return;
+    const had = !!overlay;
+    overlay = name;
+    syncOverlayClasses();
+    showBar();
+    if(!had){
+      try{ history.pushState({ folio: 1 }, ''); pushed = true; }catch(e){ pushed = false; }
+    }
+  }
+  function closeOverlay(){
+    if(!overlay) return;
+    overlay = null;
+    syncOverlayClasses();
+    lastY = window.scrollY;
+    if(pushed){
+      pushed = false; ignorePop = true;
+      try{ history.back(); }catch(e){ ignorePop = false; }
+    }
+  }
+  window.addEventListener('popstate', () => {
+    if(ignorePop){ ignorePop = false; return; }
+    if(overlay){ pushed = false; overlay = null; syncOverlayClasses(); lastY = window.scrollY; }
+  });
+  document.addEventListener('keydown', e => { if(e.key === 'Escape') closeOverlay(); });
+
+  $('toggleSidebar').addEventListener('click', () => openOverlay('drawer'));
+  $('closeSidebar').addEventListener('click', closeOverlay);
+  $('scrim').addEventListener('click', closeOverlay);
+  $('welcomeOpen').addEventListener('click', () => openOverlay('drawer'));
+  settingsBtn.addEventListener('click', () => { overlay === 'popover' ? closeOverlay() : openOverlay('popover'); });
+  document.addEventListener('click', e => {
+    if(overlay === 'popover' && !settingsPopover.contains(e.target) && !settingsBtn.contains(e.target)) closeOverlay();
+  });
+
+  // Swipe left on the drawer to close it
+  (function(){
+    const drawer = $('sidebar');
+    let sx = 0, sy = 0, on = false;
+    drawer.addEventListener('touchstart', e => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; on = true; }, { passive: true });
+    drawer.addEventListener('touchmove', e => {
+      if(!on) return;
+      const t = e.touches[0];
+      if(t.clientX - sx < -70 && Math.abs(t.clientY - sy) < 45){ on = false; closeOverlay(); }
+    }, { passive: true });
+    drawer.addEventListener('touchend', () => { on = false; }, { passive: true });
+  })();
+
+  /* ================= Tabs ================= */
+  function switchTab(name){
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    $('panel-library').classList.toggle('hidden', name !== 'library');
+    $('panel-contents').classList.toggle('hidden', name !== 'contents');
+  }
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+  /* ================= Top bar: hide on scroll down, show on scroll up ================= */
+  let ticking = false;
+  function showBar(){ app.classList.remove('bar-hidden'); }
+  function hideBar(){ if(!overlay) app.classList.add('bar-hidden'); }
+
+  window.addEventListener('scroll', () => {
+    if(ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      const y = window.scrollY;
+      if(overlay){ lastY = y; return; }
+      const maxY = document.documentElement.scrollHeight - window.innerHeight;
+      if(y <= 8 || y >= maxY - 6){ showBar(); lastY = y; return; }
+      const dy = y - lastY;
+      if(Math.abs(dy) < 6) return;                 // ignore jitter, let small moves add up
+      if(dy > 0 && y > 70) hideBar(); else if(dy < 0) showBar();
+      lastY = y;
+    });
+  }, { passive: true });
+
+  /* ================= Library ================= */
+  function renderLibrary(){
+    libraryList.textContent = '';
+    if(!state.books.length){
+      const li = document.createElement('li');
+      li.className = 'empty-state';
+      li.textContent = 'No books yet. Tap Add books and pick EPUB files from your phone.';
+      libraryList.appendChild(li);
+      return;
+    }
+    for(const b of state.books){
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.className = 'book-item' + (b.id === state.currentBookId ? ' open' : '');
+      const title = (b.meta && b.meta.title) || b.name.replace(/\.epub$/i, '');
+      const author = (b.meta && b.meta.author) || 'Tap to open';
+      const cover = document.createElement('span');
+      cover.className = 'book-cover';
+      cover.textContent = title.slice(0, 1).toUpperCase();
+      const info = document.createElement('span');
+      info.className = 'book-info';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'book-name'; nameEl.textContent = title;
+      const subEl = document.createElement('span');
+      subEl.className = 'book-sub'; subEl.textContent = author;
+      info.append(nameEl, subEl);
+      btn.append(cover, info);
+      btn.addEventListener('click', () => openBook(b));
+      li.appendChild(btn);
+      libraryList.appendChild(li);
+    }
+  }
+
+  function addFiles(fileList){
+    const added = [];
+    for(const file of Array.from(fileList)){
+      if(!/\.epub$/i.test(file.name) && file.type !== 'application/epub+zip') continue;
+      const id = bookIdFor(file.name, file.size);
+      if(state.books.some(b => b.id === id)) continue;
+      const rec = { id, name: file.name, file, meta: null };
+      state.books.push(rec);
+      added.push(rec);
+    }
+    renderLibrary();
+    if(!added.length){ toast('No new EPUB files found'); return; }
+    // One new book and nothing open yet: just open it
+    if(added.length === 1 && !state.currentBookId) openBook(added[0]);
+    else toast(added.length === 1 ? 'Book added' : added.length + ' books added');
+  }
+
+  $('pickFiles').addEventListener('click', () => $('fileInput').click());
+  $('fileInput').addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
+
+  /* ================= Opening & parsing a book ================= */
+  async function openBook(b){
+    try{
+      const buf = await b.file.arrayBuffer();
+      const zip = new MiniZip(buf);
+
+      const containerXml = await findZipFile(zip, 'META-INF/container.xml').async('text');
+      const containerDoc = new DOMParser().parseFromString(containerXml, 'application/xml');
+      const opfPath = containerDoc.querySelector('rootfile').getAttribute('full-path');
+      const opfDir = dirOf(opfPath);
+
+      const opfText = await findZipFile(zip, opfPath).async('text');
+      const opfDoc = new DOMParser().parseFromString(opfText, 'application/xml');
+
+      const titleEl = opfDoc.getElementsByTagName('dc:title')[0] || opfDoc.querySelector('title');
+      const authorEl = opfDoc.getElementsByTagName('dc:creator')[0] || opfDoc.querySelector('creator');
+      const title = titleEl ? titleEl.textContent.trim() : b.name.replace(/\.epub$/i, '');
+      const author = authorEl ? authorEl.textContent.trim() : '';
+
+      const manifest = {};
+      opfDoc.querySelectorAll('manifest > item').forEach(item => {
+        manifest[item.getAttribute('id')] = {
+          href: item.getAttribute('href'),
+          mediaType: item.getAttribute('media-type') || '',
+          properties: item.getAttribute('properties') || ''
+        };
+      });
+
+      const spine = [];
+      opfDoc.querySelectorAll('spine > itemref').forEach(ref => {
+        const item = manifest[ref.getAttribute('idref')];
+        if(item) spine.push(joinPath(opfDir, item.href));
+      });
+      if(!spine.length) throw new Error('empty spine');
+
+      for(const url of state.imageCache.values()) URL.revokeObjectURL(url);
+      state.imageCache = new Map();
+
+      state.zip = zip;
+      state.opfDir = opfDir;
+      state.spine = spine;
+      state.currentBookId = b.id;
+      b.meta = { title, author };
+
+      let toc = await parseNav3(zip, opfDir, manifest);
+      if(!toc.length) toc = await parseNCX(zip, opfDir, manifest);
+      if(!toc.length){
+        toc = spine.map((p, i) => ({ title: 'Chapter ' + (i + 1), href: '', frag: '', level: 0, resolvedPath: p }));
+      }
+      toc.forEach(t => { t.spineIdx = spineIndexFor(t.resolvedPath); });
+      state.toc = toc;
+
+      bookTitleEl.textContent = title;
+      bookAuthorEl.textContent = author;
+      app.classList.add('has-book');
+      renderLibrary();
+      renderTOC();
+
+      const saved = lsGet(bookmarkKey(b.id));
+      bookmarkBtn.classList.toggle('active', !!saved);
+      bookmarkBtn.textContent = saved ? '★' : '☆';
+
+      state.chapterIndex = saved && saved.chapterIndex < spine.length ? saved.chapterIndex : 0;
+      await renderChapter(state.chapterIndex, saved ? saved.scrollTop : 0);
+      closeOverlay();
+    }catch(err){
+      console.error(err);
+      closeOverlay();
+      content.innerHTML = '<div class="welcome"><h1>Couldn\'t open that book</h1><p>This file may be corrupted or in an unsupported format. Try another EPUB.</p></div>';
+      window.scrollTo(0, 0);
+    }
+  }
+
+  function spineIndexFor(resolvedPath){
+    const clean = resolvedPath.split('#')[0];
+    let idx = state.spine.indexOf(clean);
+    if(idx === -1){
+      const name = clean.split('/').pop();
+      idx = state.spine.findIndex(p => p.split('/').pop() === name);
+    }
+    return idx;
+  }
+
+  async function parseNav3(zip, opfDir, manifest){
+    const navItem = Object.values(manifest).find(m => (m.properties || '').split(/\s+/).includes('nav'));
+    if(!navItem) return [];
+    const navPath = joinPath(opfDir, navItem.href);
+    const entry = findZipFile(zip, navPath);
+    if(!entry) return [];
+    const doc = new DOMParser().parseFromString(await entry.async('text'), 'text/html');
+    let nav = null;
+    doc.querySelectorAll('nav').forEach(n => {
+      if(!nav && (n.getAttribute('epub:type') === 'toc' || n.getAttribute('type') === 'toc')) nav = n;
+    });
+    if(!nav) nav = doc.querySelector('nav');
+    if(!nav) return [];
+    const navDir = dirOf(navPath);
+    const out = [];
+    (function walk(ol, level){
+      for(const li of ol.children){
+        if(li.tagName.toLowerCase() !== 'li') continue;
+        const a = li.querySelector(':scope > a');
+        if(a){
+          const href = a.getAttribute('href') || '';
+          out.push({ title: a.textContent.trim(), href, frag: fragOf(href), level, resolvedPath: joinPath(navDir, href) });
+        }
+        const childOl = li.querySelector(':scope > ol');
+        if(childOl) walk(childOl, level + 1);
+      }
+    })(nav.querySelector('ol') || document.createElement('ol'), 0);
+    return out;
+  }
+
+  async function parseNCX(zip, opfDir, manifest){
+    const ncxItem = Object.values(manifest).find(m => m.mediaType === 'application/x-dtbncx+xml');
+    if(!ncxItem) return [];
+    const ncxPath = joinPath(opfDir, ncxItem.href);
+    const entry = findZipFile(zip, ncxPath);
+    if(!entry) return [];
+    const doc = new DOMParser().parseFromString(await entry.async('text'), 'application/xml');
+    const ncxDir = dirOf(ncxPath);
+    const out = [];
+    (function walk(parent, level){
+      Array.from(parent.children).forEach(child => {
+        if(child.tagName !== 'navPoint') return;
+        const label = child.querySelector('navLabel > text');
+        const ct = child.querySelector('content');
+        if(label && ct){
+          const href = ct.getAttribute('src') || '';
+          out.push({ title: label.textContent.trim(), href, frag: fragOf(href), level, resolvedPath: joinPath(ncxDir, href) });
+        }
+        walk(child, level + 1);
+      });
+    })(doc.querySelector('navMap') || doc.documentElement, 0);
+    return out;
+  }
+
+  function renderTOC(){
+    tocList.textContent = '';
+    if(!state.toc.length){
+      const li = document.createElement('li');
+      li.className = 'empty-state'; li.textContent = 'This book has no table of contents.';
+      tocList.appendChild(li);
+      return;
+    }
+    state.toc.forEach((entry, i) => {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.className = 'toc-item';
+      btn.dataset.level = Math.min(entry.level, 2);
+      btn.dataset.tocIndex = i;
+      btn.textContent = entry.title || ('Untitled ' + (i + 1));
+      btn.addEventListener('click', () => {
+        renderChapter(entry.spineIdx === -1 ? 0 : entry.spineIdx, 0, entry.frag || null);
+        closeOverlay();
+      });
+      li.appendChild(btn);
+      tocList.appendChild(li);
+    });
+  }
+
+  // Which TOC entry describes the chapter on screen?
+  function currentTocIndex(){
+    let exact = -1, before = -1;
+    state.toc.forEach((t, i) => {
+      if(t.spineIdx === state.chapterIndex && exact === -1) exact = i;
+      if(t.spineIdx !== -1 && t.spineIdx <= state.chapterIndex) before = i;
+    });
+    return exact !== -1 ? exact : before;
+  }
+
+  function updateChapterUI(){
+    document.querySelectorAll('.toc-item').forEach(el => el.classList.remove('current'));
+    const i = currentTocIndex();
+    if(i !== -1){
+      const el = document.querySelector('.toc-item[data-toc-index="' + i + '"]');
+      if(el) el.classList.add('current');
+    }
+    prevBtns.forEach(b => { b.disabled = state.chapterIndex <= 0; });
+    nextBtns.forEach(b => { b.disabled = state.chapterIndex >= state.spine.length - 1; });
+    const total = state.spine.length;
+    progressFill.style.width = (total <= 1 ? 100 : (state.chapterIndex / (total - 1)) * 100) + '%';
+  }
+
+  /* ================= Rendering a chapter ================= */
+  let renderToken = 0;
+  async function renderChapter(index, scrollTop, anchorId){
+    if(index < 0 || index >= state.spine.length) return;
+    const token = ++renderToken;
+    state.chapterIndex = index;
+    const path = state.spine[index];
+    const entry = findZipFile(state.zip, path);
+    if(!entry){ toast('That section is missing from the file'); return; }
+
+    const text = await entry.async('text');
+    if(token !== renderToken) return;
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    doc.querySelectorAll('script').forEach(s => s.remove());
+    const chapterDir = dirOf(path);
+
+    // Collect the chapter's own CSS (inline <style> + linked stylesheets) so
+    // book-defined formatting like centered lines, drop caps, or small caps
+    // survives instead of being dropped when we lift out just the body.
+    const cssChunks = [];
+    doc.querySelectorAll('style').forEach(el => cssChunks.push({ text: el.textContent || '', dir: chapterDir }));
+    for(const linkEl of Array.from(doc.querySelectorAll('link[rel~="stylesheet"], link[type="text/css"]'))){
+      const href = linkEl.getAttribute('href');
+      if(!href) continue;
+      const resolved = joinPath(chapterDir, href);
+      const cssEntry = findZipFile(state.zip, resolved);
+      if(cssEntry) cssChunks.push({ text: await cssEntry.async('text'), dir: dirOf(resolved) });
+    }
+    await applyBookCss(cssChunks);
+    if(token !== renderToken) return;
+
+    for(const img of doc.querySelectorAll('img, image')){
+      const attr = img.hasAttribute('src') ? 'src' : (img.hasAttribute('xlink:href') ? 'xlink:href' : null);
+      if(!attr) continue;
+      const src = img.getAttribute(attr);
+      if(!src || /^data:/.test(src)) continue;
+      const url = await getBlobUrl(joinPath(chapterDir, src));
+      if(url) img.setAttribute(attr === 'xlink:href' ? 'src' : attr, url);
+    }
+    if(token !== renderToken) return;
+
+    // Links: tag them with data attributes (listeners wouldn't survive innerHTML);
+    // one delegated click handler below acts on them.
+    doc.querySelectorAll('a[href]').forEach(a => {
+      const href = a.getAttribute('href') || '';
+      if(/^(https?:|mailto:|tel:)/i.test(href)){
+        a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener'); return;
+      }
+      if(href.startsWith('#')) return;
+      const idx = spineIndexFor(joinPath(chapterDir, href));
+      if(idx !== -1){
+        a.dataset.spine = String(idx);
+        const f = fragOf(href);
+        if(f) a.dataset.frag = f;
+      } else {
+        a.dataset.dead = '1';
+      }
+    });
+
+    content.innerHTML = doc.body ? doc.body.innerHTML : text;
+    window.scrollTo(0, 0);
+    lastY = 0;
+    showBar();
+
+    requestAnimationFrame(() => {
+      if(anchorId){
+        const t = content.querySelector('#' + CSS.escape(anchorId)) || content.querySelector('[name="' + CSS.escape(anchorId) + '"]');
+        if(t) t.scrollIntoView();
+      } else if(scrollTop){
+        window.scrollTo(0, scrollTop);
+      }
+      lastY = window.scrollY;
+    });
+
+    updateChapterUI();
+  }
+
+  content.addEventListener('click', e => {
+    const a = e.target.closest('a');
+    if(!a) return;
+    if(a.dataset.spine !== undefined){
+      e.preventDefault();
+      renderChapter(parseInt(a.dataset.spine, 10), 0, a.dataset.frag || null);
+      return;
+    }
+    const href = a.getAttribute('href') || '';
+    if(href.startsWith('#')){
+      e.preventDefault();
+      const id = decodePath(href.slice(1));
+      const t = id && (content.querySelector('#' + CSS.escape(id)) || content.querySelector('[name="' + CSS.escape(id) + '"]'));
+      if(t) t.scrollIntoView();
+      return;
+    }
+    if(a.dataset.dead) e.preventDefault();
+  });
+
+  // Pulls @font-face blocks out (they must live at the top level) and scopes
+  // everything else to #content, so a book's own stylesheet can format its
+  // text without ever leaking out and affecting the rest of the app UI.
+  async function applyBookCss(cssChunks){
+    const fontFaceTag = $('bookFontFaces'), scopedTag = $('bookScopedStyle');
+    if(!cssChunks.length){ fontFaceTag.textContent = ''; scopedTag.textContent = ''; return; }
+    const fontFaceRegex = /@font-face\s*{[^}]*}/gi;
+    const importRegex = /@import[^;]+;/gi;
+    let fontFaces = [];
+    const parts = [];
+    for(const chunk of cssChunks){
+      let t = chunk.text.replace(importRegex, '');
+      fontFaces = fontFaces.concat(t.match(fontFaceRegex) || []);
+      t = t.replace(fontFaceRegex, '');
+      parts.push(await rewriteCssUrls(t, chunk.dir));
+    }
+    fontFaceTag.textContent = fontFaces.join('\n');
+    scopedTag.textContent = '@scope (#content) {\n' + parts.join('\n') + '\n}';
+  }
+
+  async function rewriteCssUrls(cssText, baseDir){
+    const matches = [...cssText.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)];
+    let result = cssText;
+    for(const m of matches){
+      if(/^(data:|https?:|blob:)/i.test(m[2])) continue;
+      const blobUrl = await getBlobUrl(joinPath(baseDir, m[2]));
+      if(blobUrl) result = result.split(m[0]).join('url("' + blobUrl + '")');
+    }
+    return result;
+  }
+
+  async function getBlobUrl(resolvedPath){
+    if(state.imageCache.has(resolvedPath)) return state.imageCache.get(resolvedPath);
+    const entry = findZipFile(state.zip, resolvedPath);
+    if(!entry) return null;
+    const url = URL.createObjectURL(await entry.async('blob'));
+    state.imageCache.set(resolvedPath, url);
+    return url;
+  }
+
+  /* ================= Chapter buttons & bookmark ================= */
+  prevBtns.forEach(b => b.addEventListener('click', () => renderChapter(state.chapterIndex - 1, 0)));
+  nextBtns.forEach(b => b.addEventListener('click', () => renderChapter(state.chapterIndex + 1, 0)));
+
+  bookmarkBtn.addEventListener('click', () => {
+    if(!state.currentBookId){ toast('Open a book first'); return; }
+    const ok = lsSet(bookmarkKey(state.currentBookId), { chapterIndex: state.chapterIndex, scrollTop: Math.round(window.scrollY) });
+    if(!ok){ toast('Can\'t save here: this browser blocks storage for local files'); return; }
+    bookmarkBtn.classList.add('active', 'pulse');
+    bookmarkBtn.textContent = '★';
+    setTimeout(() => bookmarkBtn.classList.remove('pulse'), 200);
+    toast('Position saved');
+  });
+
+  /* ================= Reading settings (remembered) ================= */
+  function applyReaderVars(){
+    const root = document.documentElement.style;
+    root.setProperty('--reader-size', state.fontSize + 'px');
+    root.setProperty('--reader-leading', state.leading);
+    root.setProperty('--reader-family', state.family === 'serif' ? 'var(--font-serif)' : 'var(--font-sans-read)');
+    sizeSlider.value = state.fontSize;
+    sizeReadout.textContent = state.fontSize + 'px';
+  }
+  function syncSettingsUI(){
+    document.querySelectorAll('#familySeg button').forEach(b => b.classList.toggle('active', b.dataset.val === state.family));
+    document.querySelectorAll('#leadingSeg button').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.val) === state.leading));
+    document.querySelectorAll('#padSeg button').forEach(b => b.classList.toggle('active', parseInt(b.dataset.val, 10) === state.pad));
+  }
+  function saveSettings(){
+    lsSet(SETTINGS_KEY, { fontSize: state.fontSize, leading: state.leading, pad: state.pad, family: state.family });
+  }
+  function changed(){ applyReaderVars(); syncSettingsUI(); saveSettings(); }
+
+  $('fontDec').addEventListener('click', () => { state.fontSize = Math.max(MIN_SIZE, state.fontSize - 1); changed(); });
+  $('fontInc').addEventListener('click', () => { state.fontSize = Math.min(MAX_SIZE, state.fontSize + 1); changed(); });
+  sizeSlider.addEventListener('input', e => { state.fontSize = parseInt(e.target.value, 10); changed(); });
+
+  function bindSeg(id, apply){
+    $(id).addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if(!btn) return;
+      apply(btn.dataset.val);
+      changed();
+    });
+  }
+  bindSeg('familySeg', v => { state.family = v; });
+  bindSeg('leadingSeg', v => { state.leading = parseFloat(v); });
+  bindSeg('padSeg', v => { state.pad = parseInt(v, 10); });
+
+  /* ================= Init ================= */
+  const s = lsGet(SETTINGS_KEY);
+  if(s){
+    if(typeof s.fontSize === 'number') state.fontSize = Math.min(MAX_SIZE, Math.max(MIN_SIZE, s.fontSize));
+    if(typeof s.leading === 'number') state.leading = s.leading;
+    if(typeof s.pad === 'number') state.pad = s.pad;
+    if(s.family === 'serif' || s.family === 'sans') state.family = s.family;
+  }
+  applyReaderVars();
+  syncSettingsUI();
+})();
+</script>
+</body>
+</html>
