@@ -31,7 +31,6 @@
     --reader-size: 19px;
     --reader-leading: 1.7;
     --reader-family: var(--font-serif);
-    --reader-max: 720px;
     --topbar-h: 56px;
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -206,9 +205,8 @@
     border: 1px solid var(--border);
     overflow: hidden;
   }
-  .page-inner{ padding: 28px 9px; }
+  .page-inner{ padding: 10px 0px; }
   .page-inner-limit{
-    max-width: var(--reader-max);
     margin: 0 auto;
     font-family: var(--reader-family);
     font-size: var(--reader-size);
